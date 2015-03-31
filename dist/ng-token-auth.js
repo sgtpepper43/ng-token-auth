@@ -86,7 +86,6 @@ angular.module('ng-token-auth', ['ipCookie']).provider('$auth', function() {
           }
         }
       };
-      debugger;
       if (params instanceof Array && params.length) {
         for (i = _i = 0, _len = params.length; _i < _len; i = ++_i) {
           conf = params[i];

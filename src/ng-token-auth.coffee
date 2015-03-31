@@ -64,7 +64,6 @@ angular.module('ng-token-auth', ['ipCookie'])
             deleteData: (key) ->
               ipCookie.remove(key, {path: '/'})
         # user is using multiple concurrent configs (>1 user types).
-        debugger
         if params instanceof Array and params.length
           # extend each item in array from default settings
           for conf, i in params
