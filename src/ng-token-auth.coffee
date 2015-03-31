@@ -48,7 +48,23 @@ angular.module('ng-token-auth', ['ipCookie'])
 
     return {
       configure: (params) ->
+        storage =
+          localStorage:
+            persistData: (key, val) ->
+              $window.localStorage.setItem(key, JSON.stringify(val))
+            retrieveData: (key) ->
+              JSON.parse($window.localStorage.getItem(key))
+            deleteData: (key) ->
+              $window.localStorage.removeItem(key)
+          cookies:
+            persistData: (key, val, configName) ->
+              ipCookie(key, val, {path: '/'})
+            retrieveData: (key) ->
+              ipCookie(key)
+            deleteData: (key) ->
+              ipCookie.remove(key, {path: '/'})
         # user is using multiple concurrent configs (>1 user types).
+        debugger
         if params instanceof Array and params.length
           # extend each item in array from default settings
           for conf, i in params
@@ -65,7 +81,10 @@ angular.module('ng-token-auth', ['ipCookie'])
             defaults = angular.copy(configs["default"])
             fullConfig = {}
             fullConfig[label] = angular.extend(defaults, conf[label])
+            unless fullConfig[label].storage instanceof Object
+              fullConfig[label].storage = storage[fullConfig[label].storage]
             angular.extend(configs, fullConfig)
+
 
           # remove existng default config
           delete configs["default"] unless defaultConfigName == "default"
@@ -73,6 +92,8 @@ angular.module('ng-token-auth', ['ipCookie'])
         # user is extending the single default config
         else if params instanceof Object
           angular.extend(configs["default"], params)
+          unless configs["default"].storage instanceof Object
+            configs["default"].storage = storage[configs["default"].storage]
 
         # user is doing something wrong
         else
@@ -101,7 +122,6 @@ angular.module('ng-token-auth', ['ipCookie'])
           initialize: ->
             @initializeListeners()
             @addScopeMethods()
-
 
           initializeListeners: ->
             #@listener = @handlePostMessage.bind(@)
@@ -562,28 +582,17 @@ angular.module('ng-token-auth', ['ipCookie'])
 
           # abstract persistent data store
           persistData: (key, val, configName) ->
-            switch @getConfig(configName).storage
-              when 'localStorage'
-                $window.localStorage.setItem(key, JSON.stringify(val))
-              else
-                ipCookie(key, val, {path: '/'})
+            @getConfig(configName).storage.persistData(key, val)
 
 
           # abstract persistent data retrieval
           retrieveData: (key) ->
-            switch @getConfig().storage
-              when 'localStorage'
-                JSON.parse($window.localStorage.getItem(key))
-              else ipCookie(key)
+            @getConfig().storage.retrieveData(key)
 
 
           # abstract persistent data removal
           deleteData: (key) ->
-            switch @getConfig().storage
-              when 'localStorage'
-                $window.localStorage.removeItem(key)
-              else
-                ipCookie.remove(key, {path: '/'})
+            @getConfig().storage.deleteData(key);
 
 
           # persist authentication token, client id, uid
