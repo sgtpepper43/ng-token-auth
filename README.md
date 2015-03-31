@@ -212,11 +212,13 @@ angular.module('myApp', ['ng-token-auth'])
 | **handleTokenValidationResponse** | a function that will identify and return the current user's info (id, username, etc.) in the response of a successful token validation request. [Read more](#using-alternate-response-formats). |
 
 #### Custom Storage Object
-Must implement the follow interface:
+Must implement the following interface:
 ```javascript
-  persistData(key, val)
-  retrieveData(key)
-  deleteData: (key)
+{
+  function persistData(key, val) {}
+  function retrieveData(key) {}
+  function deleteData(key) {}
+}
 ```
 
 # Usage
