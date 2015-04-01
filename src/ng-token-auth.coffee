@@ -229,7 +229,11 @@ angular.module('ng-token-auth', ['ipCookie'])
 
           # check if user is authenticated
           userIsAuthenticated: ->
-            @retrieveData('auth_headers') and @user.signedIn and not @tokenHasExpired()
+            defered = $q.defer()
+            $q.when(@retrieveData('auth_headers')).then (headers) ->
+              @tokenHasExipred().then (hasExpired) ->
+                defered.resolve(headers and @user.signedIn and not hasExpired)
+            return defered.promise
 
 
           # request password reset from API
@@ -268,20 +272,21 @@ angular.module('ng-token-auth', ['ipCookie'])
               .success((resp) =>
 
                 updateResponse = @getConfig().handleAccountUpdateResponse(resp)
-                curHeaders = @retrieveData('auth_headers')
+                $q.when(@retrieveData('auth_headers')).then (headers) ->
+                  curHeaders = headers
 
-                angular.extend @user, updateResponse
+                  angular.extend @user, updateResponse
 
-                # ensure any critical headers (uid + ?) that are returned in
-                # the update response are updated appropriately in storage
-                if curHeaders
-                  newHeaders = {}
-                  for key, val of @getConfig().tokenFormat
-                    if curHeaders[key] && updateResponse[key]
-                      newHeaders[key] = updateResponse[key]
-                  @setAuthHeaders(newHeaders)
+                  # ensure any critical headers (uid + ?) that are returned in
+                  # the update response are updated appropriately in storage
+                  if curHeaders
+                    newHeaders = {}
+                    for key, val of @getConfig().tokenFormat
+                      if curHeaders[key] && updateResponse[key]
+                        newHeaders[key] = updateResponse[key]
+                    @setAuthHeaders(newHeaders)
 
-                $rootScope.$broadcast('auth:account-update-success', resp)
+                  $rootScope.$broadcast('auth:account-update-success', resp)
               )
               .error((resp) ->
                 $rootScope.$broadcast('auth:account-update-error', resp)
@@ -391,68 +396,72 @@ angular.module('ng-token-auth', ['ipCookie'])
 
               # save trip to API if possible. assume that user is still signed
               # in if auth headers are present and token has not expired.
-              if @userIsAuthenticated()
-                  # user is still presumably logged in
-                  @resolveDfd()
+              @userIsAuthenticated().then (isAuthenticated) ->
+                if isAuthenticated
+                    # user is still presumably logged in
+                    @resolveDfd()
 
-              else
-                # token querystring is present. user most likely just came from
-                # registration email link.
-                if $location.search().token != undefined
-                  token      = $location.search().token
-                  clientId   = $location.search().client_id
-                  uid        = $location.search().uid
-                  expiry     = $location.search().expiry
-                  configName = $location.search().config
-
-                  # use the configuration that was used in creating
-                  # the confirmation link
-                  @setConfigName(configName)
-
-                  # check if redirected from password reset link
-                  @mustResetPassword = $location.search().reset_password
-
-                  # check if redirected from email confirmation link
-                  @firstTimeLogin = $location.search().account_confirmation_success
-
-                  # persist these values
-                  @setAuthHeaders(@buildAuthHeaders({
-                    token:    token
-                    clientId: clientId
-                    uid:      uid
-                    expiry:   expiry
-                  }))
-
-                  # strip qs from url to prevent re-use of these params
-                  # on page refresh
-                  $location.url(($location.path() || '/'))
-
-                # token cookie is present. user is returning to the site, or
-                # has refreshed the page.
-                else if @retrieveData('currentConfigName')
-                  configName = @retrieveData('currentConfigName')
-
-                unless isEmpty(@retrieveData('auth_headers'))
-                  # if token has expired, do not verify token with API
-                  if @tokenHasExpired()
-                    $rootScope.$broadcast('auth:session-expired')
-                    @rejectDfd({
-                      reason: 'unauthorized'
-                      errors: ['Session expired.']
-                    })
-
-                  else
-                    # token has been saved in session var, token has not
-                    # expired. must be verified with API.
-                    @validateToken({config: configName})
-
-                # new user session. will redirect to login
                 else
-                  @rejectDfd({
-                    reason: 'unauthorized'
-                    errors: ['No credentials']
-                  })
-                  $rootScope.$broadcast('auth:invalid')
+                  $q.when(@retrieveData('currentConfigName')).then (currentConfigName) ->
+                    # token querystring is present. user most likely just came from
+                    # registration email link.
+                    if $location.search().token != undefined
+                      token      = $location.search().token
+                      clientId   = $location.search().client_id
+                      uid        = $location.search().uid
+                      expiry     = $location.search().expiry
+                      configName = $location.search().config
+
+                      # use the configuration that was used in creating
+                      # the confirmation link
+                      @setConfigName(configName)
+
+                      # check if redirected from password reset link
+                      @mustResetPassword = $location.search().reset_password
+
+                      # check if redirected from email confirmation link
+                      @firstTimeLogin = $location.search().account_confirmation_success
+
+                      # persist these values
+                      @setAuthHeaders(@buildAuthHeaders({
+                        token:    token
+                        clientId: clientId
+                        uid:      uid
+                        expiry:   expiry
+                      }))
+
+                      # strip qs from url to prevent re-use of these params
+                      # on page refresh
+                      $location.url(($location.path() || '/'))
+
+                    # token cookie is present. user is returning to the site, or
+                    # has refreshed the page.
+                    else if currentConfigName
+                      configName = currentConfigName
+
+                    $q.when(@retrieveData('auth_headers')).then (headers) ->
+                      @tokenHasExpired().then (hasExpired) ->
+                        unless isEmpty(headers)
+                          # if token has expired, do not verify token with API
+                          if hasExpired
+                            $rootScope.$broadcast('auth:session-expired')
+                            @rejectDfd({
+                              reason: 'unauthorized'
+                              errors: ['Session expired.']
+                            })
+
+                          else
+                            # token has been saved in session var, token has not
+                            # expired. must be verified with API.
+                            @validateToken({config: configName})
+
+                        # new user session. will redirect to login
+                        else
+                          @rejectDfd({
+                            reason: 'unauthorized'
+                            errors: ['No credentials']
+                          })
+                          $rootScope.$broadcast('auth:invalid')
 
 
             @dfd.promise
@@ -460,54 +469,59 @@ angular.module('ng-token-auth', ['ipCookie'])
 
           # confirm that user's auth token is still valid.
           validateToken: (opts={}) ->
-            unless @tokenHasExpired()
-              $http.get(@apiUrl(opts.config) + @getConfig(opts.config).tokenValidationPath)
-                .success((resp) =>
-                  authData = @getConfig(opts.config).handleTokenValidationResponse(resp)
-                  @handleValidAuth(authData)
+            @tokenHasExpired().then (hasExpired) ->
+              unless hasExpired
+                $http.get(@apiUrl(opts.config) + @getConfig(opts.config).tokenValidationPath)
+                  .success((resp) =>
+                    authData = @getConfig(opts.config).handleTokenValidationResponse(resp)
+                    @handleValidAuth(authData)
 
-                  # broadcast event for first time login
-                  if @firstTimeLogin
-                    $rootScope.$broadcast('auth:email-confirmation-success', @user)
+                    # broadcast event for first time login
+                    if @firstTimeLogin
+                      $rootScope.$broadcast('auth:email-confirmation-success', @user)
 
-                  if @mustResetPassword
-                    $rootScope.$broadcast('auth:password-reset-confirm-success', @user)
+                    if @mustResetPassword
+                      $rootScope.$broadcast('auth:password-reset-confirm-success', @user)
 
-                  $rootScope.$broadcast('auth:validation-success', @user)
-                )
-                .error((data) =>
-                  # broadcast event for first time login failure
-                  if @firstTimeLogin
-                    $rootScope.$broadcast('auth:email-confirmation-error', data)
+                    $rootScope.$broadcast('auth:validation-success', @user)
+                  )
+                  .error((data) =>
+                    # broadcast event for first time login failure
+                    if @firstTimeLogin
+                      $rootScope.$broadcast('auth:email-confirmation-error', data)
 
-                  if @mustResetPassword
-                    $rootScope.$broadcast('auth:password-reset-confirm-error', data)
+                    if @mustResetPassword
+                      $rootScope.$broadcast('auth:password-reset-confirm-error', data)
 
-                  $rootScope.$broadcast('auth:validation-error', data)
+                    $rootScope.$broadcast('auth:validation-error', data)
 
-                  @rejectDfd({
-                    reason: 'unauthorized'
-                    errors: data.errors
-                  })
-                )
-            else
-              @rejectDfd({
-                reason: 'unauthorized'
-                errors: ['Expired credentials']
-              })
+                    @rejectDfd({
+                      reason: 'unauthorized'
+                      errors: data.errors
+                    })
+                  )
+              else
+                @rejectDfd({
+                  reason: 'unauthorized'
+                  errors: ['Expired credentials']
+                })
 
 
           # ensure token has not expired
           tokenHasExpired: ->
-            expiry = @getExpiry()
-            now    = new Date().getTime()
-
-            return (expiry and expiry < now)
+            defered = $q.defer()
+            @getExpiry().then (expiry) ->
+              now = new Date().getTime()
+              defered.resolve(expiry and expiry < now)
+            return defered.promise
 
 
           # get expiry by method provided in config
           getExpiry: ->
-            @getConfig().parseExpiry(@retrieveData('auth_headers') || {})
+            defered = $q.defer()
+            $q.when(@retrieveData('auth_headers')).then (headers) ->
+              defered.resolve @getConfig().parseExpiry(headers || {})
+            return defered.promise
 
 
           # this service attempts to cache auth tokens, but sometimes we
@@ -596,20 +610,19 @@ angular.module('ng-token-auth', ['ipCookie'])
 
           # persist authentication token, client id, uid
           setAuthHeaders: (h) ->
-            newHeaders = angular.extend((@retrieveData('auth_headers') || {}), h)
-            result = @persistData('auth_headers', newHeaders)
+            $q.when(@retrieveData('auth_headers')).then (headers) ->
 
-            expiry = @getExpiry()
-            now    = new Date().getTime()
+              newHeaders = angular.extend((headers || {}), h)
+              $q.when(@persistData('auth_headers', newHeaders)).then (result) ->
+                @getExpiry().then (expiry) ->
+                  now = new Date().getTime()
 
-            if expiry > now
-              $timeout.cancel @timer if @timer?
+                  if expiry > now
+                    $timeout.cancel @timer if @timer?
 
-              @timer = $timeout (=>
-                @validateUser {config: @getSavedConfig()}
-              ), parseInt (expiry - now) / 1000
-
-            result
+                    @timer = $timeout (=>
+                      @validateUser {config: @getSavedConfig()}
+                    ), parseInt (expiry - now) / 1000
 
 
 
@@ -694,10 +707,13 @@ angular.module('ng-token-auth', ['ipCookie'])
     # responses are sometimes returned out of order. check that response is
     # current before saving the auth data.
     tokenIsCurrent = ($auth, headers) ->
-      oldTokenExpiry = Number($auth.getExpiry())
-      newTokenExpiry = Number($auth.getConfig().parseExpiry(headers || {}))
+      defered = $q.defer()
+      $auth.getExpiry().then (expiry) ->
+        oldTokenExpiry = Number(expiry)
+        newTokenExpiry = Number($auth.getConfig().parseExpiry(headers || {}))
+        defered.resolve(newTokenExpiry >= oldTokenExpiry)
 
-      return newTokenExpiry >= oldTokenExpiry
+      return defered.promise
 
 
     # uniform handling of response headers for success or error conditions
@@ -706,9 +722,9 @@ angular.module('ng-token-auth', ['ipCookie'])
       for key, val of $auth.getConfig().tokenFormat
         if resp.headers(key)
           newHeaders[key] = resp.headers(key)
-
-      if tokenIsCurrent($auth, newHeaders)
-        $auth.setAuthHeaders(newHeaders)
+      tokenIsCurrent($auth, newHeaders).then (isCurrent) ->
+        if isCurrent
+          $auth.setAuthHeaders(newHeaders)
 
     # this is ugly...
     # we need to configure an interceptor (must be done in the configuration
@@ -718,13 +734,16 @@ angular.module('ng-token-auth', ['ipCookie'])
     # http://stackoverflow.com/questions/14681654/i-need-two-instances-of-angularjs-http-service-or-what
     $httpProvider.interceptors.push ['$injector', ($injector) ->
       request: (req) ->
+        defered = $q.defer()
         $injector.invoke ['$http', '$auth',  ($http, $auth) ->
           if req.url.match($auth.apiUrl())
-            for key, val of $auth.retrieveData('auth_headers')
-              req.headers[key] = val
+            $q.when($auth.retrieveData('auth_headers')).then (headers) ->
+              for key, val of headers
+                req.headers[key] = val
+              defered.resolve(req)
         ]
 
-        return req
+        return defered.promise
 
       response: (resp) ->
         $injector.invoke ['$http', '$auth', ($http, $auth) ->

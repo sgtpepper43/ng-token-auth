@@ -229,7 +229,14 @@ angular.module('ng-token-auth', ['ipCookie']).provider('$auth', function() {
               return this.dfd.promise;
             },
             userIsAuthenticated: function() {
-              return this.retrieveData('auth_headers') && this.user.signedIn && !this.tokenHasExpired();
+              var defered;
+              defered = $q.defer();
+              $q.when(this.retrieveData('auth_headers')).then(function(headers) {
+                return this.tokenHasExipred().then(function(hasExpired) {
+                  return defered.resolve(headers && this.user.signedIn && !hasExpired);
+                });
+              });
+              return defered.promise;
             },
             requestPasswordReset: function(params, opts) {
               var successUrl;
@@ -260,22 +267,25 @@ angular.module('ng-token-auth', ['ipCookie']).provider('$auth', function() {
             updateAccount: function(params) {
               return $http.put(this.apiUrl() + this.getConfig().accountUpdatePath, params).success((function(_this) {
                 return function(resp) {
-                  var curHeaders, key, newHeaders, updateResponse, val, _ref;
+                  var updateResponse;
                   updateResponse = _this.getConfig().handleAccountUpdateResponse(resp);
-                  curHeaders = _this.retrieveData('auth_headers');
-                  angular.extend(_this.user, updateResponse);
-                  if (curHeaders) {
-                    newHeaders = {};
-                    _ref = _this.getConfig().tokenFormat;
-                    for (key in _ref) {
-                      val = _ref[key];
-                      if (curHeaders[key] && updateResponse[key]) {
-                        newHeaders[key] = updateResponse[key];
+                  return $q.when(_this.retrieveData('auth_headers')).then(function(headers) {
+                    var curHeaders, key, newHeaders, val, _ref;
+                    curHeaders = headers;
+                    angular.extend(this.user, updateResponse);
+                    if (curHeaders) {
+                      newHeaders = {};
+                      _ref = this.getConfig().tokenFormat;
+                      for (key in _ref) {
+                        val = _ref[key];
+                        if (curHeaders[key] && updateResponse[key]) {
+                          newHeaders[key] = updateResponse[key];
+                        }
                       }
+                      this.setAuthHeaders(newHeaders);
                     }
-                    _this.setAuthHeaders(newHeaders);
-                  }
-                  return $rootScope.$broadcast('auth:account-update-success', resp);
+                    return $rootScope.$broadcast('auth:account-update-success', resp);
+                  });
                 };
               })(this)).error(function(resp) {
                 return $rootScope.$broadcast('auth:account-update-error', resp);
@@ -371,55 +381,64 @@ angular.module('ng-token-auth', ['ipCookie']).provider('$auth', function() {
               })(this)), 0);
             },
             validateUser: function(opts) {
-              var clientId, configName, expiry, token, uid;
+              var configName;
               if (opts == null) {
                 opts = {};
               }
               configName = opts.config;
               if (this.dfd == null) {
                 this.initDfd();
-                if (this.userIsAuthenticated()) {
-                  this.resolveDfd();
-                } else {
-                  if ($location.search().token !== void 0) {
-                    token = $location.search().token;
-                    clientId = $location.search().client_id;
-                    uid = $location.search().uid;
-                    expiry = $location.search().expiry;
-                    configName = $location.search().config;
-                    this.setConfigName(configName);
-                    this.mustResetPassword = $location.search().reset_password;
-                    this.firstTimeLogin = $location.search().account_confirmation_success;
-                    this.setAuthHeaders(this.buildAuthHeaders({
-                      token: token,
-                      clientId: clientId,
-                      uid: uid,
-                      expiry: expiry
-                    }));
-                    $location.url($location.path() || '/');
-                  } else if (this.retrieveData('currentConfigName')) {
-                    configName = this.retrieveData('currentConfigName');
-                  }
-                  if (!isEmpty(this.retrieveData('auth_headers'))) {
-                    if (this.tokenHasExpired()) {
-                      $rootScope.$broadcast('auth:session-expired');
-                      this.rejectDfd({
-                        reason: 'unauthorized',
-                        errors: ['Session expired.']
-                      });
-                    } else {
-                      this.validateToken({
-                        config: configName
-                      });
-                    }
+                this.userIsAuthenticated().then(function(isAuthenticated) {
+                  if (isAuthenticated) {
+                    return this.resolveDfd();
                   } else {
-                    this.rejectDfd({
-                      reason: 'unauthorized',
-                      errors: ['No credentials']
+                    return $q.when(this.retrieveData('currentConfigName')).then(function(currentConfigName) {
+                      var clientId, expiry, token, uid;
+                      if ($location.search().token !== void 0) {
+                        token = $location.search().token;
+                        clientId = $location.search().client_id;
+                        uid = $location.search().uid;
+                        expiry = $location.search().expiry;
+                        configName = $location.search().config;
+                        this.setConfigName(configName);
+                        this.mustResetPassword = $location.search().reset_password;
+                        this.firstTimeLogin = $location.search().account_confirmation_success;
+                        this.setAuthHeaders(this.buildAuthHeaders({
+                          token: token,
+                          clientId: clientId,
+                          uid: uid,
+                          expiry: expiry
+                        }));
+                        $location.url($location.path() || '/');
+                      } else if (currentConfigName) {
+                        configName = currentConfigName;
+                      }
+                      return $q.when(this.retrieveData('auth_headers')).then(function(headers) {
+                        return this.tokenHasExpired().then(function(hasExpired) {
+                          if (!isEmpty(headers)) {
+                            if (hasExpired) {
+                              $rootScope.$broadcast('auth:session-expired');
+                              return this.rejectDfd({
+                                reason: 'unauthorized',
+                                errors: ['Session expired.']
+                              });
+                            } else {
+                              return this.validateToken({
+                                config: configName
+                              });
+                            }
+                          } else {
+                            this.rejectDfd({
+                              reason: 'unauthorized',
+                              errors: ['No credentials']
+                            });
+                            return $rootScope.$broadcast('auth:invalid');
+                          }
+                        });
+                      });
                     });
-                    $rootScope.$broadcast('auth:invalid');
                   }
-                }
+                });
               }
               return this.dfd.promise;
             },
@@ -427,50 +446,61 @@ angular.module('ng-token-auth', ['ipCookie']).provider('$auth', function() {
               if (opts == null) {
                 opts = {};
               }
-              if (!this.tokenHasExpired()) {
-                return $http.get(this.apiUrl(opts.config) + this.getConfig(opts.config).tokenValidationPath).success((function(_this) {
-                  return function(resp) {
-                    var authData;
-                    authData = _this.getConfig(opts.config).handleTokenValidationResponse(resp);
-                    _this.handleValidAuth(authData);
-                    if (_this.firstTimeLogin) {
-                      $rootScope.$broadcast('auth:email-confirmation-success', _this.user);
-                    }
-                    if (_this.mustResetPassword) {
-                      $rootScope.$broadcast('auth:password-reset-confirm-success', _this.user);
-                    }
-                    return $rootScope.$broadcast('auth:validation-success', _this.user);
-                  };
-                })(this)).error((function(_this) {
-                  return function(data) {
-                    if (_this.firstTimeLogin) {
-                      $rootScope.$broadcast('auth:email-confirmation-error', data);
-                    }
-                    if (_this.mustResetPassword) {
-                      $rootScope.$broadcast('auth:password-reset-confirm-error', data);
-                    }
-                    $rootScope.$broadcast('auth:validation-error', data);
-                    return _this.rejectDfd({
-                      reason: 'unauthorized',
-                      errors: data.errors
-                    });
-                  };
-                })(this));
-              } else {
-                return this.rejectDfd({
-                  reason: 'unauthorized',
-                  errors: ['Expired credentials']
-                });
-              }
+              return this.tokenHasExpired().then(function(hasExpired) {
+                if (!hasExpired) {
+                  return $http.get(this.apiUrl(opts.config) + this.getConfig(opts.config).tokenValidationPath).success((function(_this) {
+                    return function(resp) {
+                      var authData;
+                      authData = _this.getConfig(opts.config).handleTokenValidationResponse(resp);
+                      _this.handleValidAuth(authData);
+                      if (_this.firstTimeLogin) {
+                        $rootScope.$broadcast('auth:email-confirmation-success', _this.user);
+                      }
+                      if (_this.mustResetPassword) {
+                        $rootScope.$broadcast('auth:password-reset-confirm-success', _this.user);
+                      }
+                      return $rootScope.$broadcast('auth:validation-success', _this.user);
+                    };
+                  })(this)).error((function(_this) {
+                    return function(data) {
+                      if (_this.firstTimeLogin) {
+                        $rootScope.$broadcast('auth:email-confirmation-error', data);
+                      }
+                      if (_this.mustResetPassword) {
+                        $rootScope.$broadcast('auth:password-reset-confirm-error', data);
+                      }
+                      $rootScope.$broadcast('auth:validation-error', data);
+                      return _this.rejectDfd({
+                        reason: 'unauthorized',
+                        errors: data.errors
+                      });
+                    };
+                  })(this));
+                } else {
+                  return this.rejectDfd({
+                    reason: 'unauthorized',
+                    errors: ['Expired credentials']
+                  });
+                }
+              });
             },
             tokenHasExpired: function() {
-              var expiry, now;
-              expiry = this.getExpiry();
-              now = new Date().getTime();
-              return expiry && expiry < now;
+              var defered;
+              defered = $q.defer();
+              this.getExpiry().then(function(expiry) {
+                var now;
+                now = new Date().getTime();
+                return defered.resolve(expiry && expiry < now);
+              });
+              return defered.promise;
             },
             getExpiry: function() {
-              return this.getConfig().parseExpiry(this.retrieveData('auth_headers') || {});
+              var defered;
+              defered = $q.defer();
+              $q.when(this.retrieveData('auth_headers')).then(function(headers) {
+                return defered.resolve(this.getConfig().parseExpiry(headers || {}));
+              });
+              return defered.promise;
             },
             invalidateTokens: function() {
               var key, val, _ref;
@@ -538,24 +568,28 @@ angular.module('ng-token-auth', ['ipCookie']).provider('$auth', function() {
               return this.getConfig().storage.deleteData(key);
             },
             setAuthHeaders: function(h) {
-              var expiry, newHeaders, now, result;
-              newHeaders = angular.extend(this.retrieveData('auth_headers') || {}, h);
-              result = this.persistData('auth_headers', newHeaders);
-              expiry = this.getExpiry();
-              now = new Date().getTime();
-              if (expiry > now) {
-                if (this.timer != null) {
-                  $timeout.cancel(this.timer);
-                }
-                this.timer = $timeout(((function(_this) {
-                  return function() {
-                    return _this.validateUser({
-                      config: _this.getSavedConfig()
-                    });
-                  };
-                })(this)), parseInt((expiry - now) / 1000));
-              }
-              return result;
+              return $q.when(this.retrieveData('auth_headers')).then(function(headers) {
+                var newHeaders;
+                newHeaders = angular.extend(headers || {}, h);
+                return $q.when(this.persistData('auth_headers', newHeaders)).then(function(result) {
+                  return this.getExpiry().then(function(expiry) {
+                    var now;
+                    now = new Date().getTime();
+                    if (expiry > now) {
+                      if (this.timer != null) {
+                        $timeout.cancel(this.timer);
+                      }
+                      return this.timer = $timeout(((function(_this) {
+                        return function() {
+                          return _this.validateUser({
+                            config: _this.getSavedConfig()
+                          });
+                        };
+                      })(this)), parseInt((expiry - now) / 1000));
+                    }
+                  });
+                });
+              });
             },
             useExternalWindow: function() {
               return !(this.getConfig().forceHardRedirect || $window.isIE());
@@ -617,10 +651,15 @@ angular.module('ng-token-auth', ['ipCookie']).provider('$auth', function() {
   '$httpProvider', function($httpProvider) {
     var httpMethods, tokenIsCurrent, updateHeadersFromResponse;
     tokenIsCurrent = function($auth, headers) {
-      var newTokenExpiry, oldTokenExpiry;
-      oldTokenExpiry = Number($auth.getExpiry());
-      newTokenExpiry = Number($auth.getConfig().parseExpiry(headers || {}));
-      return newTokenExpiry >= oldTokenExpiry;
+      var defered;
+      defered = $q.defer();
+      $auth.getExpiry().then(function(expiry) {
+        var newTokenExpiry, oldTokenExpiry;
+        oldTokenExpiry = Number(expiry);
+        newTokenExpiry = Number($auth.getConfig().parseExpiry(headers || {}));
+        return defered.resolve(newTokenExpiry >= oldTokenExpiry);
+      });
+      return defered.promise;
     };
     updateHeadersFromResponse = function($auth, resp) {
       var key, newHeaders, val, _ref;
@@ -632,29 +671,33 @@ angular.module('ng-token-auth', ['ipCookie']).provider('$auth', function() {
           newHeaders[key] = resp.headers(key);
         }
       }
-      if (tokenIsCurrent($auth, newHeaders)) {
-        return $auth.setAuthHeaders(newHeaders);
-      }
+      return tokenIsCurrent($auth, newHeaders).then(function(isCurrent) {
+        if (isCurrent) {
+          return $auth.setAuthHeaders(newHeaders);
+        }
+      });
     };
     $httpProvider.interceptors.push([
       '$injector', function($injector) {
         return {
           request: function(req) {
+            var defered;
+            defered = $q.defer();
             $injector.invoke([
               '$http', '$auth', function($http, $auth) {
-                var key, val, _ref, _results;
                 if (req.url.match($auth.apiUrl())) {
-                  _ref = $auth.retrieveData('auth_headers');
-                  _results = [];
-                  for (key in _ref) {
-                    val = _ref[key];
-                    _results.push(req.headers[key] = val);
-                  }
-                  return _results;
+                  return $q.when($auth.retrieveData('auth_headers')).then(function(headers) {
+                    var key, val;
+                    for (key in headers) {
+                      val = headers[key];
+                      req.headers[key] = val;
+                    }
+                    return defered.resolve(req);
+                  });
                 }
               }
             ]);
-            return req;
+            return defered.promise;
           },
           response: function(resp) {
             $injector.invoke([
